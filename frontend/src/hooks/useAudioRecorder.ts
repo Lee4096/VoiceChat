@@ -23,6 +23,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
   const isRecordingRef = useRef(false)
   const [state, setState] = useState<RecorderState>('idle')
   const recordingChunksRef = useRef<Float32Array[]>([])
+  const actualSampleRateRef = useRef<number>(16000)
 
   const getUserMedia = useCallback(async () => {
     console.log('[Recorder] getUserMedia called')
@@ -150,6 +151,31 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
     }
   }, [bufferSize, createAudioContext, getUserMedia, onData, onError, state])
 
+  const resample = useCallback((input: Float32Array, inputRate: number, outputRate: number): Float32Array => {
+    if (inputRate === outputRate) {
+      return input
+    }
+    const ratio = inputRate / outputRate
+    const outputLength = Math.round(input.length / ratio)
+    const output = new Float32Array(outputLength)
+
+    for (let i = 0; i < outputLength; i++) {
+      const srcIdx = i * ratio
+      const srcIdxFloor = Math.floor(srcIdx)
+      const srcIdxCeil = Math.ceil(srcIdx)
+
+      if (srcIdxCeil >= input.length) {
+        output[i] = input[input.length - 1]
+      } else if (srcIdxFloor === srcIdxCeil || srcIdxFloor >= input.length) {
+        output[i] = input[srcIdxFloor]
+      } else {
+        const fraction = srcIdx - srcIdxFloor
+        output[i] = input[srcIdxFloor] * (1 - fraction) + input[srcIdxCeil] * fraction
+      }
+    }
+    return output
+  }, [])
+
   const stop = useCallback(async () => {
     console.log('[Recorder] stop called, current state:', state)
     if (state !== 'recording') {
@@ -161,7 +187,6 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
     console.log('[Recorder] isRecordingRef set to false')
 
     if (workletRef.current) {
-      // 通知 worklet 停止
       workletRef.current.port.postMessage('stop')
       workletRef.current.disconnect()
       workletRef.current = null
@@ -187,8 +212,20 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
 
     recordingChunksRef.current = []
 
+    const targetSampleRate = 16000
+    const actualSampleRate = audioContextRef.current?.sampleRate ?? targetSampleRate
+    console.log('[Recorder] Actual sample rate:', actualSampleRate, ', Target:', targetSampleRate)
+
+    if (actualSampleRate !== targetSampleRate) {
+      console.log('[Recorder] Resampling from', actualSampleRate, 'to', targetSampleRate)
+      const resampled = resample(pcmData, actualSampleRate, targetSampleRate)
+      actualSampleRateRef.current = targetSampleRate
+      return resampled
+    }
+
+    actualSampleRateRef.current = actualSampleRate
     return pcmData
-  }, [state])
+  }, [state, resample])
 
   const pause = useCallback(() => {
     if (state === 'recording') {
@@ -244,7 +281,7 @@ export function useAudioRecorder(options: UseAudioRecorderOptions = {}) {
   }, [])
 
   const getSampleRate = useCallback(() => {
-    return audioContextRef.current?.sampleRate ?? 16000
+    return actualSampleRateRef.current
   }, [])
 
   return {

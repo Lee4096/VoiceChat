@@ -2,6 +2,42 @@ import { useCallback, useRef, useState } from 'react'
 
 export type AudioPlayerState = 'idle' | 'buffering' | 'playing' | 'paused'
 
+function createWavHeader(audioData: ArrayBuffer, sampleRate: number, numChannels: number, bitsPerSample: number): ArrayBuffer {
+  const bytesPerSample = bitsPerSample / 8
+  const dataSize = audioData.byteLength
+  const headerSize = 44
+  const totalSize = headerSize + dataSize
+
+  const buffer = new ArrayBuffer(totalSize)
+  const view = new DataView(buffer)
+
+  const writeString = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i))
+    }
+  }
+
+  writeString(0, 'RIFF')
+  view.setUint32(4, totalSize - 8, true)
+  writeString(8, 'WAVE')
+  writeString(12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, numChannels, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * numChannels * bytesPerSample, true)
+  view.setUint16(32, numChannels * bytesPerSample, true)
+  view.setUint16(34, bitsPerSample, true)
+  writeString(36, 'data')
+  view.setUint32(40, dataSize, true)
+
+  const audioBytes = new Uint8Array(audioData)
+  const resultBytes = new Uint8Array(buffer)
+  resultBytes.set(audioBytes, headerSize)
+
+  return resultBytes.buffer
+}
+
 interface QueuedAudio {
   id: string
   audioBuffer: AudioBuffer
@@ -104,7 +140,8 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     }
 
     try {
-      const audioBuffer = await decodeAudioData(arrayBuffer)
+      const wavBuffer = createWavHeader(arrayBuffer, 16000, 1, 16)
+      const audioBuffer = await decodeAudioData(wavBuffer)
       const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
 
       queueRef.current.push({ id, audioBuffer })

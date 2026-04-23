@@ -56,9 +56,9 @@ voice:
   vad_aggressiveness: 2
 
 llm:
-  base_url: "https://openrouter.ai/api/v1"
-  api_key: "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"
-  model: "minimax/minimax-m2.5:free"
+  base_url: "https://api.deepseek.com/v1"
+  api_key: "sk-d3a34957d09e42ccbc29cd9cf952120e"
+  model: "deepseek-chat"
   max_tokens: 2048
   temperature: 0.7
   system_prompt: "You are a helpful AI assistant."
