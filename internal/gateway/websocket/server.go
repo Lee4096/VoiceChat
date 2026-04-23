@@ -328,7 +328,7 @@ func (s *Server) handleVoiceData(client *Client, msg *ClientMessage) {
 }
 
 // handleAIVoiceChat 处理语音输入：ASR -> LLM -> TTS，返回音频响应。
-// 完整管道：Base64 音频 -> 解码 -> 识别 -> LLM 聊天 -> 清理文本 -> 合成 -> 编码 -> 响应
+// 完整管道：Base64 音频 -> 解码 -> 识别 -> LLM 流式聊天 -> TTS 并发合成 -> 流式响应
 func (s *Server) handleAIVoiceChat(client *Client, msg *ClientMessage) {
 	s.logger.Info("handleAIVoiceChat: processor=%v", client.processor != nil)
 	if client.processor == nil {
@@ -348,6 +348,12 @@ func (s *Server) handleAIVoiceChat(client *Client, msg *ClientMessage) {
 	}
 
 	s.logger.Info("Audio payload length: %d", len(payload.Audio))
+
+	// 发送思考中状态：正在识别语音
+	client.sendJSON(Message{
+		Type:    "thinking",
+		Payload: json.RawMessage(`{"status":"recognizing"}`),
+	})
 
 	// 解码 Base64 音频为原始字节
 	audioData, err := utils.Base64Decode(payload.Audio)
@@ -371,69 +377,117 @@ func (s *Server) handleAIVoiceChat(client *Client, msg *ClientMessage) {
 
 	s.logger.Info("ASR result: %+v", result)
 
-	if result != nil && result.Text != "" {
-		s.logger.Info("User %s said: %s", client.userID, result.Text)
+	if result == nil || result.Text == "" {
+		s.logger.Info("ASR returned empty result")
+		client.sendJSON(Message{
+			Type:    "thinking",
+			Payload: json.RawMessage(`{"status":"no_speech"}`),
+		})
+		return
+	}
 
-		// 步骤 2：LLM 聊天
-		ctx, cancel := context.WithTimeout(context.Background(), LLMTimeout)
-		defer cancel()
+	s.logger.Info("User %s said: %s", client.userID, result.Text)
 
-		aiResp, err := s.llm.Chat(ctx, result.Text)
-		if err != nil {
-			s.logger.Error("LLM error: %v", err)
-			return
+	// 发送思考中状态：正在生成回复
+	client.sendJSON(Message{
+		Type:    "thinking",
+		Payload: json.RawMessage(`{"status":"generating"}`),
+	})
+
+	// 步骤 2：LLM 流式聊天
+	ctx, cancel := context.WithTimeout(context.Background(), LLMTimeout)
+	defer cancel()
+
+	textChan, err := s.llm.ChatStreamText(ctx, []ai.ChatMessage{{Role: "user", Content: result.Text}})
+	if err != nil {
+		s.logger.Error("LLM stream error: %v", err)
+		return
+	}
+
+	// 用于收集完整文本用于最终响应
+	fullText := &strings.Builder{}
+	ttsChan := make(chan string, 10)
+	audioOutChan := make(chan []float32, 5)
+	doneChan := make(chan struct{})
+
+	// 启动 TTS 并发合成
+	go func() {
+		for text := range ttsChan {
+			cleanText := cleanTextForTTS(text)
+			if cleanText == "" {
+				continue
+			}
+			audio, err := client.processor.Synthesize(cleanText)
+			if err != nil {
+				s.logger.Error("TTS error for chunk: %v", err)
+				continue
+			}
+			select {
+			case audioOutChan <- audio:
+			case <-doneChan:
+				return
+			}
 		}
+		close(audioOutChan)
+	}()
 
-		s.logger.Info("AI response: %s", aiResp.Content)
-
-		// 步骤 3：清理 TTS 文本（移除 emoji，截断）
-		cleanText := cleanTextForTTS(aiResp.Content)
-		s.logger.Info("Cleaned text for TTS: %s", cleanText)
-
-		s.logger.Info("Starting TTS synthesis...")
-
-		// 步骤 4：带超时的文本转语音合成
-		ttsCtx, ttsCancel := context.WithTimeout(context.Background(), TTSTimeout)
-		done := make(chan struct{})
-		var audio []float32
-		var ttsErr error
-
-		go func() {
-			audio, ttsErr = client.processor.Synthesize(cleanText)
-			close(done)
-		}()
-
-		select {
-		case <-ttsCtx.Done():
-			s.logger.Error("TTS timeout after %v", TTSTimeout)
-			ttsCancel()
-			return
-		case <-done:
-			ttsCancel()
+	// 处理 LLM 流式输出
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				close(ttsChan)
+				return
+			case text, ok := <-textChan:
+				if !ok {
+					close(ttsChan)
+					return
+				}
+				fullText.WriteString(text)
+				// 发送增量文本（用于前端显示）
+				client.sendJSON(Message{
+					Type:    "ai_text_delta",
+					Payload: json.RawMessage(fmt.Sprintf(`{"text":"%s"}`, utils.EscapeJSONString(text))),
+				})
+				// 发送到 TTS 合成
+				select {
+				case ttsChan <- text:
+				case <-doneChan:
+					return
+				}
+			}
 		}
+	}()
 
-		if ttsErr != nil {
-			s.logger.Error("TTS error: %v", ttsErr)
-			return
-		}
-		s.logger.Info("TTS synthesis complete, audio length: %d samples", len(audio))
-
-		// 步骤 5：编码音频并发送响应
+	// 收集 TTS 音频并流式发送给客户端
+	var totalAudio []float32
+	for audio := range audioOutChan {
 		int16Audio := voice.Float32ToInt16(audio)
 		audioB64 := utils.Base64Encode(utils.Int16ToBytes(int16Audio))
-
-		response := Message{
+		client.sendJSON(Message{
 			Type: "ai_voice_response",
 			Payload: json.RawMessage(fmt.Sprintf(
-				`{"text":"%s","audio":"%s","is_final":true}`,
-				utils.EscapeJSONString(aiResp.Content),
+				`{"audio":"%s","is_final":false}`,
 				audioB64,
 			)),
-		}
-		client.sendJSON(response)
-	} else {
-		s.logger.Info("ASR returned empty result")
+		})
+		totalAudio = append(totalAudio, audio...)
 	}
+
+	close(doneChan)
+
+	// 发送最终响应
+	if totalAudio != nil {
+		s.logger.Info("TTS synthesis complete, total audio length: %d samples", len(totalAudio))
+	} else {
+		s.logger.Info("No audio generated, sending text-only response")
+	}
+
+	// 发送完成状态
+	client.sendJSON(Message{
+		Type:    "thinking",
+		Payload: json.RawMessage(`{"status":"done"}`),
+	})
 }
 
 // handleAITextChat 处理文本输入：LLM 聊天，返回文本响应。

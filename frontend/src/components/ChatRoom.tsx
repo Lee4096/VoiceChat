@@ -18,7 +18,7 @@ interface ChatRoomProps {
 
 export function ChatRoom({ onLeave }: ChatRoomProps) {
   const { currentRoom, members, localStream, remoteStreams, setCurrentRoom, connectionState } = useRoomStore()
-  const { user } = useAuthStore()
+  const { user: _user } = useAuthStore()
   const [isMuted, setIsMuted] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [aiMessages, setAIMessages] = useState<AIMessage[]>([])
@@ -29,8 +29,6 @@ export function ChatRoom({ onLeave }: ChatRoomProps) {
   const audioContextRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const animationRef = useRef<number | null>(null)
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const audioChunksRef = useRef<Blob[]>([])
   const recordingChunksRef = useRef<Float32Array[]>([])
   const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null)
 
@@ -98,9 +96,25 @@ export function ChatRoom({ onLeave }: ChatRoomProps) {
       setIsAITyping(false)
     }
 
+    const handleThinking = (msg: any) => {
+      console.log('Received thinking:', msg)
+      const payload = msg.payload || {}
+      if (payload.status === 'generating' || payload.status === 'recognizing') {
+        setIsAITyping(true)
+      } else if (payload.status === 'done' || payload.status === 'no_speech') {
+        setIsAITyping(false)
+      }
+    }
+
+    const handleTextDelta = (msg: any) => {
+      console.log('Received ai_text_delta:', msg)
+    }
+
     signalingClient.on('ai_voice_response', handleAIVoiceResponse as any)
     signalingClient.on('ai_text_response', handleAITextResponse as any)
     signalingClient.on('stop_audio', handleStopAudio as any)
+    signalingClient.on('thinking', handleThinking as any)
+    signalingClient.on('ai_text_delta', handleTextDelta as any)
 
     return () => {
       leaveRoom()
@@ -108,6 +122,8 @@ export function ChatRoom({ onLeave }: ChatRoomProps) {
       signalingClient.off('ai_voice_response', handleAIVoiceResponse as any)
       signalingClient.off('ai_text_response', handleAITextResponse as any)
       signalingClient.off('stop_audio', handleStopAudio as any)
+      signalingClient.off('thinking', handleThinking as any)
+      signalingClient.off('ai_text_delta', handleTextDelta as any)
     }
   }, [])
 
@@ -154,16 +170,6 @@ export function ChatRoom({ onLeave }: ChatRoomProps) {
       })
       setIsMuted(!isMuted)
     }
-  }
-
-  const base64ToBlob = (base64: string, mimeType: string): Blob => {
-    const byteCharacters = atob(base64)
-    const byteNumbers = new Array(byteCharacters.length)
-    for (let i = 0; i < byteCharacters.length; i++) {
-      byteNumbers[i] = byteCharacters.charCodeAt(i)
-    }
-    const byteArray = new Uint8Array(byteNumbers)
-    return new Blob([byteArray], { type: mimeType })
   }
 
   const handleAITextSubmit = (e: React.FormEvent) => {
@@ -270,15 +276,6 @@ export function ChatRoom({ onLeave }: ChatRoomProps) {
     scriptProcessorRef.current = null
     audioContextRef.current = null
   }, [])
-
-  const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
-    const bytes = new Uint8Array(buffer)
-    let binary = ''
-    for (let i = 0; i < bytes.byteLength; i++) {
-      binary += String.fromCharCode(bytes[i])
-    }
-    return btoa(binary)
-  }
 
   const int16ArrayToBase64 = (int16Array: Int16Array): string => {
     const bytes = new Uint8Array(int16Array.buffer)

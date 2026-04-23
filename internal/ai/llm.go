@@ -184,7 +184,7 @@ func (c *LLMClient) Chat(ctx context.Context, messages []ChatMessage) (*ChatResp
 // 调用者应从返回的通道读取直到它关闭。
 // 上下文取消将停止流。
 func (c *LLMClient) ChatStream(ctx context.Context, messages []ChatMessage) (<-chan *StreamResponse, error) {
-	url := fmt.Sprintf("%s/api/chat", c.cfg.BaseURL)
+	url := fmt.Sprintf("%s/chat/completions", c.cfg.BaseURL)
 
 	if c.cfg.SystemPrompt != "" {
 		messages = append([]ChatMessage{
@@ -262,6 +262,32 @@ func (c *LLMClient) ChatStream(ctx context.Context, messages []ChatMessage) (<-c
 	}()
 
 	return resultChan, nil
+}
+
+// ChatStreamText 启动流式聊天会话，只返回文本增量。
+// 更适合需要简单文本流的场景。
+func (c *LLMClient) ChatStreamText(ctx context.Context, messages []ChatMessage) (<-chan string, error) {
+	streamChan, err := c.ChatStream(ctx, messages)
+	if err != nil {
+		return nil, err
+	}
+
+	textChan := make(chan string, 256)
+
+	go func() {
+		defer close(textChan)
+		for resp := range streamChan {
+			if len(resp.Choices) > 0 && resp.Choices[0].Delta.Content != "" {
+				select {
+				case textChan <- resp.Choices[0].Delta.Content:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+
+	return textChan, nil
 }
 
 // CompletionRequest 发送到 LLM 补全端点，用于简单的 prompt 补全。
