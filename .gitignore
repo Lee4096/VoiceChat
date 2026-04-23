@@ -1,0 +1,48 @@
+# Binaries
+/server
+*.exe
+*.dll
+*.so
+*.dylib
+bin/
+coverage.html
+
+# Test binary
+*.test
+
+# Output of go coverage
+*.out
+
+# Dependency directories
+vendor/
+node_modules/
+frontend/node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+nohup.out
+logs/
+
+# Environment
+.env
+.voicechat-server.pid
+
+# Build
+dist/
+.vite/
+
+# Models (large binary files, download at runtime)
+models/
+
+# MonkeyCode metadata
+.monkeycode/

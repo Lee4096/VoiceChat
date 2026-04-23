@@ -1,0 +1,222 @@
+# Voice Server Kubernetes 部署配置
+
+---
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: voicechat
+  labels:
+    name: voicechat
+
+---
+# ConfigMap - 应用配置
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: voicechat-server-config
+  namespace: voicechat
+data:
+  LOG_LEVEL: "INFO"
+  TZ: "Asia/Shanghai"
+  HTTP_PORT: "8080"
+  WS_PORT: "8081"
+  SIGNALING_PORT: "8082"
+
+---
+# Secret - 敏感配置
+apiVersion: v1
+kind: Secret
+metadata:
+  name: voicechat-server-secret
+  namespace: voicechat
+type: Opaque
+stringData:
+  DB_PASSWORD: "change-me-in-production"
+  REDIS_PASSWORD: ""
+  JWT_SECRET: "change-me-use-openssl-rand-base64-32"
+  LLM_API_KEY: "your-api-key"
+
+---
+# Service - HTTP API
+apiVersion: v1
+kind: Service
+metadata:
+  name: voicechat-http
+  namespace: voicechat
+  labels:
+    app: voicechat-server
+    component: http
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+      name: http
+  selector:
+    app: voicechat-server
+    component: http
+
+---
+# Service - WebSocket
+apiVersion: v1
+kind: Service
+metadata:
+  name: voicechat-ws
+  namespace: voicechat
+  labels:
+    app: voicechat-server
+    component: ws
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8081
+      targetPort: 8081
+      protocol: TCP
+      name: ws
+  selector:
+    app: voicechat-server
+
+---
+# Service - Signaling
+apiVersion: v1
+kind: Service
+metadata:
+  name: voicechat-signaling
+  namespace: voicechat
+  labels:
+    app: voicechat-server
+    component: signaling
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8082
+      targetPort: 8082
+      protocol: TCP
+      name: signaling
+  selector:
+    app: voicechat-server
+
+---
+# Deployment - Voice Server
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: voicechat-server
+  namespace: voicechat
+  labels:
+    app: voicechat-server
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: voicechat-server
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: voicechat-server
+    spec:
+      containers:
+        - name: voicechat-server
+          image: voicechat/voicechat-server:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 8081
+              name: ws
+            - containerPort: 8082
+              name: signaling
+          envFrom:
+            - configMapRef:
+                name: voicechat-server-config
+            - secretRef:
+                name: voicechat-server-secret
+          env:
+            - name: DB_HOST
+              value: "postgres.voicechat.svc.cluster.local"
+            - name: REDIS_HOST
+              value: "redis.voicechat.svc.cluster.local"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: models
+              mountPath: /app/models
+              readOnly: true
+            - name: logs
+              mountPath: /app/logs
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: voicechat-models-pvc
+        - name: logs
+          emptyDir: {}
+      restartPolicy: Always
+
+---
+# PersistentVolumeClaim - 模型文件存储
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: voicechat-models-pvc
+  namespace: voicechat
+spec:
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: 10Gi
+---
+# HorizontalPodAutoscaler - 自动扩缩容
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: voicechat-server-hpa
+  namespace: voicechat
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: voicechat-server
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
