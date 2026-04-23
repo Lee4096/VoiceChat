@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,7 +20,10 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		panic(fmt.Sprintf("Failed to load config: %v", err))
+	}
 
 	logger := utils.NewLogger(cfg.LogLevel)
 	ctx := context.Background()
