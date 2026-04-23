@@ -1,6 +1,7 @@
 package voice
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -141,6 +142,14 @@ type VoiceProcessor struct {
 	audioBuf   []float32  // 缓冲的音频样本，等待处理
 	sampleRate int        // 音频采样率（例如 16000 Hz）
 	mu         sync.Mutex // 保护并发访问时的 audioBuf
+	vad        *VADProcessor // 可选的 VAD 处理器
+}
+
+// VoiceProcessorConfig 配置 VoiceProcessor 的选项。
+type VoiceProcessorConfig struct {
+	EnableVAD         bool   // 是否启用 WebRTC VAD
+	VADAggressiveness  int    // VAD  aggressiveness (0-3)
+	VADFrameSize       int    // VAD 帧大小（样本数）
 }
 
 // NewVoiceProcessor 创建具有给定语音服务和采样率的新 VoiceProcessor。
@@ -150,6 +159,20 @@ func NewVoiceProcessor(svc *SherpaVoiceService, sampleRate int) *VoiceProcessor 
 		audioBuf:   make([]float32, 0),
 		sampleRate: sampleRate,
 	}
+}
+
+// NewVoiceProcessorWithVAD 创建带 WebRTC VAD 的 VoiceProcessor。
+func NewVoiceProcessorWithVAD(svc *SherpaVoiceService, sampleRate int, cfg VoiceProcessorConfig) *VoiceProcessor {
+	vp := NewVoiceProcessor(svc, sampleRate)
+	if cfg.EnableVAD {
+		vadCfg := WebRTCVADConfig{
+			SampleRate:      sampleRate,
+			FrameSize:      cfg.VADFrameSize,
+			Aggressiveness: cfg.VADAggressiveness,
+		}
+		vp.vad = NewVADProcessor(vadCfg, nil)
+	}
+	return vp
 }
 
 // AddAudio 将音频样本追加到内部缓冲区。
@@ -194,4 +217,24 @@ func (p *VoiceProcessor) Reset() {
 	p.audioBuf = p.audioBuf[:0]
 	p.mu.Unlock()
 	p.svc.ResetASR()
+	if p.vad != nil {
+		p.vad.Reset()
+	}
+}
+
+// ProcessWithVAD 处理音频并返回 VAD 结果。
+// 音频数据应为字节格式（16位 PCM）。
+func (p *VoiceProcessor) ProcessWithVAD(ctx context.Context, audioData []byte) (*WebRTCVADResult, error) {
+	if p.vad == nil || p.vad.vad == nil {
+		return nil, nil
+	}
+	return p.vad.vad.ProcessAudio(ctx, audioData)
+}
+
+// IsSpeaking 返回当前 VAD 是否检测到语音活动。
+func (p *VoiceProcessor) IsSpeaking() bool {
+	if p.vad == nil {
+		return false
+	}
+	return p.vad.IsSpeaking()
 }
