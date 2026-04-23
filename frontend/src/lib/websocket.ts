@@ -168,6 +168,10 @@ class SignalingClient {
     })
   }
 
+  sendInterrupt() {
+    this.send({ type: 'interrupt' })
+  }
+
   isConnected() {
     return this.ws && this.ws.readyState === WebSocket.OPEN
   }

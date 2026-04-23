@@ -262,6 +262,9 @@ func (s *Server) handleMessage(client *Client, msg *ClientMessage) {
 	case "ai_text_chat":
 		s.logger.Info("Routing to handleAITextChat")
 		s.handleAITextChat(client, msg)
+	case "interrupt":
+		s.logger.Info("Routing to handleInterrupt")
+		s.handleInterrupt(client, msg)
 	default:
 		s.logger.Error("Unknown message type: %s", msg.Type)
 	}
@@ -482,6 +485,21 @@ func (s *Server) broadcastToRoom(roomID string, msg Message, except *Client) {
 			c.sendJSON(msg)
 		}
 	}
+}
+
+// handleInterrupt 处理客户端发送的打断请求。
+// 当用户按下打断按钮时，向房间内其他客户端发送 stop_audio 消息，
+// 通知它们停止当前 TTS 合成和音频播放。
+func (s *Server) handleInterrupt(client *Client, msg *ClientMessage) {
+	s.logger.Info("User %s triggered interrupt in room %s", client.userID, client.roomID)
+
+	stopMsg := Message{
+		Type:    "stop_audio",
+		Payload: json.RawMessage(fmt.Sprintf(`{"user_id":"%s"}`, client.userID)),
+	}
+	s.broadcastToRoom(client.roomID, stopMsg, client)
+
+	s.logger.Info("Sent stop_audio to room %s", client.roomID)
 }
 
 func (s *Server) forwardToUser(roomID, targetUserID, msgType string, payload json.RawMessage) {

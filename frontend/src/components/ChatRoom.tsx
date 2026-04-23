@@ -93,14 +93,21 @@ export function ChatRoom({ onLeave }: ChatRoomProps) {
       }])
     }
 
+    const handleStopAudio = (msg: any) => {
+      console.log('Received stop_audio from:', msg)
+      setIsAITyping(false)
+    }
+
     signalingClient.on('ai_voice_response', handleAIVoiceResponse as any)
     signalingClient.on('ai_text_response', handleAITextResponse as any)
+    signalingClient.on('stop_audio', handleStopAudio as any)
 
     return () => {
       leaveRoom()
       signalingClient.disconnect()
       signalingClient.off('ai_voice_response', handleAIVoiceResponse as any)
       signalingClient.off('ai_text_response', handleAITextResponse as any)
+      signalingClient.off('stop_audio', handleStopAudio as any)
     }
   }, [])
 
@@ -489,6 +496,17 @@ export function ChatRoom({ onLeave }: ChatRoomProps) {
               <p className="text-gray-400 text-sm ml-2 flex items-center">
                 {isRecording ? 'Recording...' : 'Hold to speak'}
               </p>
+              {isAITyping && (
+                <button
+                  onClick={() => signalingClient.sendInterrupt()}
+                  className="ml-4 p-4 rounded-full bg-red-600 hover:bg-red-700 transition-colors"
+                >
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+                  </svg>
+                </button>
+              )}
             </div>
           </div>
         </div>
