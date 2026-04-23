@@ -7,7 +7,7 @@
 - **后端**: Go + WebSocket + PostgreSQL + Redis
 - **前端**: React + Vite + TypeScript + TailwindCSS
 - **语音**: Sherpa-ONNX (Paraformer ASR + Kokoro TTS)
-- **AI**: OpenRouter LLM API
+- **AI**: DeepSeek LLM API
 
 ## 项目结构
 
@@ -70,7 +70,7 @@ graph TB
     end
 
     subgraph External["外部服务"]
-        LLM["LLM API OpenRouter"]
+        LLM["LLM API DeepSeek"]
         OAuth["OAuth2 GitHub Google"]
         STUN["STUN/TURN"]
     end
@@ -102,7 +102,7 @@ graph TB
 | 信令服务 | WebRTC | SDP offer/answer、ICE candidate 转发 |
 | ASR | Paraformer | 语音识别 |
 | TTS | Kokoro | 语音合成 |
-| LLM | OpenRouter | 大语言模型 |
+| LLM | DeepSeek | 大语言模型 |
 
 ## 核心流程
 
