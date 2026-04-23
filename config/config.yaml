@@ -64,5 +64,6 @@ llm:
   system_prompt: "You are a helpful AI assistant."
 
 log_level: "INFO"
+log_format: "json"
 
 mode: "release"

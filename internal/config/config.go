@@ -19,6 +19,7 @@ type Config struct {
 	Voice      VoiceConfig
 	LLM        LLMConfig
 	LogLevel   string
+	LogFormat  string
 	Mode       string
 }
 
@@ -132,6 +133,7 @@ func Load() (*Config, error) {
 	v.SetDefault("llm.model", "minimax/minimax-m2.5:free")
 	v.SetDefault("llm.system_prompt", "You are a helpful AI assistant.")
 	v.SetDefault("log_level", "INFO")
+	v.SetDefault("log_format", "text")
 	v.SetDefault("mode", "release")
 
 	v.AddConfigPath(".")

@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"voicechat/internal/ai"
+	"voicechat/internal/auth"
 	"voicechat/internal/config"
 	httpgateway "voicechat/internal/gateway/http"
 	"voicechat/internal/gateway/websocket"
@@ -25,7 +26,12 @@ func main() {
 		panic(fmt.Sprintf("Failed to load config: %v", err))
 	}
 
-	logger := utils.NewLogger(cfg.LogLevel)
+	var logger *utils.Logger
+	if cfg.LogFormat == "json" {
+		logger = utils.NewJSONLogger(cfg.LogLevel)
+	} else {
+		logger = utils.NewLogger(cfg.LogLevel)
+	}
 	ctx := context.Background()
 
 	pg, err := postgres.New(ctx, cfg.Database)
@@ -78,7 +84,31 @@ func main() {
 		ReadTimeout:  cfg.HTTP.ReadTimeout,
 		WriteTimeout: cfg.HTTP.WriteTimeout,
 	}
-	httpServer := httpgateway.NewServer(httpCfg, logger, pg, rd, signalServer)
+	jwtCfg := auth.JWTConfig{
+		Secret:     cfg.JWT.Secret,
+		Expiration: cfg.JWT.Expiration,
+	}
+	oauthCfg := httpgateway.OAuth2ConfigInput{
+		GitHub: struct {
+			ClientID     string
+			ClientSecret string
+			CallbackURL  string
+		}{
+			ClientID:     cfg.OAuth2.GitHub.ClientID,
+			ClientSecret: cfg.OAuth2.GitHub.ClientSecret,
+			CallbackURL:  cfg.OAuth2.GitHub.CallbackURL,
+		},
+		Google: struct {
+			ClientID     string
+			ClientSecret string
+			CallbackURL  string
+		}{
+			ClientID:     cfg.OAuth2.Google.ClientID,
+			ClientSecret: cfg.OAuth2.Google.ClientSecret,
+			CallbackURL:  cfg.OAuth2.Google.CallbackURL,
+		},
+	}
+	httpServer := httpgateway.NewServer(httpCfg, logger, pg, rd, signalServer, jwtCfg, oauthCfg)
 	defer httpServer.Close()
 
 	go signalServer.Run(ctx)

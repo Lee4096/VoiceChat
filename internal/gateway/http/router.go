@@ -1,7 +1,6 @@
 package http
 
 import (
-	"net/http"
 	"time"
 
 	"voicechat/internal/auth"
@@ -29,6 +28,7 @@ type Server struct {
 	roomService   *room.Service
 	engine        *gin.Engine
 	rateLimiter   *middleware.RateLimiter
+	healthChecker *HealthChecker
 }
 
 type Logger interface {
@@ -43,67 +43,72 @@ type Config struct {
 	WriteTimeout int
 }
 
-func NewServer(cfg Config, logger Logger, pg *postgres.DB, rd *redis.Client, signal *signaling.Server) *Server {
+type OAuth2ConfigInput struct {
+	GitHub struct {
+		ClientID     string
+		ClientSecret string
+		CallbackURL  string
+	}
+	Google struct {
+		ClientID     string
+		ClientSecret string
+		CallbackURL  string
+	}
+}
+
+func (o OAuth2ConfigInput) ToAuthOAuth2Config() auth.OAuth2Config {
+	return auth.OAuth2Config{
+		GitHub: auth.OAuth2ProviderConfig{
+			ClientID:     o.GitHub.ClientID,
+			ClientSecret: o.GitHub.ClientSecret,
+			CallbackURL:  o.GitHub.CallbackURL,
+		},
+		Google: auth.OAuth2ProviderConfig{
+			ClientID:     o.Google.ClientID,
+			ClientSecret: o.Google.ClientSecret,
+			CallbackURL:  o.Google.CallbackURL,
+		},
+	}
+}
+
+func NewServer(cfg Config, logger Logger, pg *postgres.DB, rd *redis.Client, signal *signaling.Server, jwtCfg auth.JWTConfig, oauthCfg OAuth2ConfigInput) *Server {
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
 	engine.Use(gin.Recovery())
 
 	s := &Server{
-		cfg:       cfg,
-		logger:    logger,
-		pg:        pg,
-		redis:     rd,
-		signaling: signal,
+		cfg:         cfg,
+		logger:      logger,
+		pg:          pg,
+		redis:       rd,
+		signaling:   signal,
 		rateLimiter: middleware.NewRateLimiter(100, time.Minute),
 	}
 
-	s.setupServices()
+	s.setupServices(jwtCfg, oauthCfg)
 	s.setupRoutes(engine)
 
 	return s
 }
 
-func (s *Server) setupServices() {
-	jwtCfg := struct {
-		Secret     string
-		Expiration int
-	}{
-		Secret:     "fireredchat-secret",
-		Expiration: 86400,
-	}
-
-	oauthCfg := struct {
-		GitHub struct {
-			ClientID     string
-			ClientSecret string
-			CallbackURL  string
-		}
-		Google struct {
-			ClientID     string
-			ClientSecret string
-			CallbackURL  string
-		}
-	}{}
-
+func (s *Server) setupServices(jwtCfg auth.JWTConfig, oauthCfg OAuth2ConfigInput) {
 	s.jwtService = auth.NewJWTService(jwtCfg)
-	s.oauthSvc = auth.NewOAuth2Service(oauthCfg)
+	s.oauthSvc = auth.NewOAuth2Service(oauthCfg.ToAuthOAuth2Config())
 	s.passwordSvc = auth.NewPasswordService(s.pg.Pool())
 	s.userService = user.NewService(s.pg.Pool())
 	s.roomService = room.NewService(s.pg.Pool())
+	s.healthChecker = NewHealthChecker(s.pg, s.redis)
 }
 
 func (s *Server) setupRoutes(e *gin.Engine) {
 	e.Use(middleware.CORSMiddleware())
 	e.Use(gin.Logger())
 
-	e.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
-	})
+	s.healthChecker.RegisterRoutes(e)
 
 	authHandler := handler.NewAuthHandler(s.jwtService, s.oauthSvc, s.passwordSvc, s.userService)
 	roomHandler := handler.NewRoomHandler(s.roomService)
 	userHandler := handler.NewUserHandler(s.userService)
-	healthHandler := handler.NewHealthHandler()
 
 	api := e.Group("/api/v1")
 	api.Use(middleware.RateLimitMiddleware(s.rateLimiter))
@@ -132,8 +137,6 @@ func (s *Server) setupRoutes(e *gin.Engine) {
 		{
 			users.GET("/me", userHandler.GetCurrentUser)
 		}
-
-		api.GET("/health", healthHandler.Health)
 	}
 
 	s.engine = e

@@ -9,12 +9,21 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"voicechat/internal/config"
 )
 
+type OAuth2Config struct {
+	GitHub  OAuth2ProviderConfig
+	Google  OAuth2ProviderConfig
+}
+
+type OAuth2ProviderConfig struct {
+	ClientID     string
+	ClientSecret string
+	CallbackURL  string
+}
+
 type OAuth2Service struct {
-	cfg    config.OAuth2Config
+	cfg    OAuth2Config
 	client *http.Client
 }
 
@@ -38,7 +47,7 @@ type GoogleUser struct {
 	Picture       string `json:"picture"`
 }
 
-func NewOAuth2Service(cfg config.OAuth2Config) *OAuth2Service {
+func NewOAuth2Service(cfg OAuth2Config) *OAuth2Service {
 	return &OAuth2Service{
 		cfg: cfg,
 		client: &http.Client{

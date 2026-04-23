@@ -4,10 +4,13 @@ import (
 	"errors"
 	"time"
 
-	"voicechat/internal/config"
-
 	"github.com/golang-jwt/jwt/v5"
 )
+
+type JWTConfig struct {
+	Secret     string
+	Expiration int
+}
 
 type JWTService struct {
 	secret     []byte
@@ -20,7 +23,7 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-func NewJWTService(cfg config.JWTConfig) *JWTService {
+func NewJWTService(cfg JWTConfig) *JWTService {
 	return &JWTService{
 		secret:     []byte(cfg.Secret),
 		expiration: time.Duration(cfg.Expiration) * time.Second,
