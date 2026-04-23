@@ -55,6 +55,21 @@ build-arm:
 	@mkdir -p $(BUILD_DIR)
 	GOOS=linux GOARCH=arm64 $(GO) build $(GOFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-arm64 ./cmd/server
 
+# 多架构构建
+docker-build-multi:
+	@echo "构建多架构 Docker 镜像..."
+	docker buildx build \
+		--platform linux/amd64,linux/arm64 \
+		-t $(DOCKER_IMAGE):$(DOCKER_TAG) \
+		-t $(DOCKER_IMAGE):latest \
+		--push \
+		.
+
+# Docker 镜像扫描
+docker-scan:
+	@echo "扫描 Docker 镜像安全漏洞..."
+	docker scout cves $(DOCKER_IMAGE):$(DOCKER_TAG)
+
 # 运行
 run:
 	@echo "启动服务..."

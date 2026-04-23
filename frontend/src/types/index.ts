@@ -52,4 +52,29 @@ export interface TTSEvent {
   isFinal: boolean
 }
 
-export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error'
+export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error'
+
+export interface PingMessage {
+  type: 'ping'
+  payload: { seq: number }
+}
+
+export interface PongMessage {
+  type: 'pong'
+  payload: { seq: number }
+}
+
+export interface ThinkingMessage {
+  type: 'thinking'
+  payload: { status: 'recognizing' | 'generating' | 'done' | 'no_speech' }
+}
+
+export interface TextDeltaMessage {
+  type: 'ai_text_delta'
+  payload: { text: string }
+}
+
+export interface StopAudioMessage {
+  type: 'stop_audio'
+  payload: { user_id: string }
+}

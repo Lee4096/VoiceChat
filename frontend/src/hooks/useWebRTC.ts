@@ -8,11 +8,25 @@ interface UseWebRTCOptions {
   onLocalStream?: (stream: MediaStream) => void
   onRemoteStream?: (userId: string, stream: MediaStream) => void
   onError?: (error: Error) => void
+  onReconnecting?: (attempt: number) => void
+  onReconnected?: () => void
+}
+
+interface PeerConnection {
+  peer: SimplePeer.Instance
+  userId: string
+  iceConnectionState: RTCIceConnectionState
 }
 
 export function useWebRTC(options: UseWebRTCOptions = {}) {
-  const peers = useRef<Map<string, SimplePeer.Instance>>(new Map())
+  const peers = useRef<Map<string, PeerConnection>>(new Map())
   const localStreamRef = useRef<MediaStream | null>(null)
+  const reconnectAttemptsRef = useRef(0)
+  const maxReconnectAttempts = 10
+  const baseReconnectDelay = 1000
+  const maxReconnectDelay = 30000
+  const reconnectTimerRef = useRef<number | null>(null)
+  const isReconnectingRef = useRef(false)
 
   const { setLocalStream, addRemoteStream, removeRemoteStream, currentRoom } = useRoomStore()
   const { user, token } = useAuthStore()
@@ -36,6 +50,85 @@ export function useWebRTC(options: UseWebRTCOptions = {}) {
       throw error
     }
   }, [setLocalStream, options])
+
+  const monitorPeerConnection = useCallback((peer: SimplePeer.Instance, userId: string) => {
+    const rtcPeer = (peer as any)._pc as RTCPeerConnection | undefined
+    if (!rtcPeer) return
+
+    const checkState = () => {
+      const state = rtcPeer.iceConnectionState
+      const conn = peers.current.get(userId)
+      if (conn) {
+        conn.iceConnectionState = state
+      }
+
+      console.log(`ICE connection state for ${userId}:`, state)
+
+      if (state === 'disconnected' || state === 'failed') {
+        handleDisconnection(userId)
+      } else if (state === 'connected') {
+        handleSuccessfulConnection()
+      }
+    }
+
+    rtcPeer.addEventListener('iceconnectionstatechange', checkState)
+    checkState()
+
+    return () => {
+      rtcPeer.removeEventListener('iceconnectionstatechange', checkState)
+    }
+  }, [])
+
+  const handleDisconnection = useCallback((userId: string) => {
+    if (isReconnectingRef.current) return
+
+    isReconnectingRef.current = true
+    reconnectAttemptsRef.current++
+
+    const attempt = reconnectAttemptsRef.current
+    const delay = Math.min(
+      baseReconnectDelay * Math.pow(2, attempt - 1),
+      maxReconnectDelay
+    )
+
+    console.log(`WebRTC disconnected for ${userId}, attempt ${attempt} in ${delay}ms`)
+    options.onReconnecting?.(attempt)
+
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current)
+    }
+
+    reconnectTimerRef.current = window.setTimeout(() => {
+      const conn = peers.current.get(userId)
+      if (conn) {
+        conn.peer.destroy()
+        peers.current.delete(userId)
+        removeRemoteStream(userId)
+      }
+
+      if (userId && localStreamRef.current) {
+        const newPeer = createPeer(userId, true)
+        if (newPeer && reconnectAttemptsRef.current < maxReconnectAttempts) {
+          console.log(`Reconnection attempt ${reconnectAttemptsRef.current} for ${userId}`)
+        }
+      }
+
+      isReconnectingRef.current = false
+    }, delay)
+  }, [options, removeRemoteStream])
+
+  const handleSuccessfulConnection = useCallback(() => {
+    console.log('WebRTC connected successfully')
+    reconnectAttemptsRef.current = 0
+    isReconnectingRef.current = false
+
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current)
+      reconnectTimerRef.current = null
+    }
+
+    options.onReconnected?.()
+  }, [options])
 
   const createPeer = useCallback((userId: string, initiator: boolean) => {
     if (!localStreamRef.current) {
@@ -76,33 +169,35 @@ export function useWebRTC(options: UseWebRTCOptions = {}) {
       options.onError?.(err)
     })
 
-    peers.current.set(userId, peer)
+    peers.current.set(userId, { peer, userId, iceConnectionState: 'new' })
+    monitorPeerConnection(peer, userId)
+
     return peer
-  }, [currentRoom, addRemoteStream, removeRemoteStream, options])
+  }, [currentRoom, addRemoteStream, removeRemoteStream, options, monitorPeerConnection])
 
   const handleOffer = useCallback((userId: string, sdp: RTCSessionDescriptionInit) => {
-    let peer = peers.current.get(userId)
-    if (!peer) {
+    let conn = peers.current.get(userId)
+    if (!conn) {
       const newPeer = createPeer(userId, false)
       if (newPeer) {
         newPeer.signal(sdp)
       }
     } else {
-      peer.signal(sdp)
+      conn.peer.signal(sdp)
     }
   }, [createPeer])
 
   const handleAnswer = useCallback((userId: string, sdp: RTCSessionDescriptionInit) => {
-    const peer = peers.current.get(userId)
-    if (peer) {
-      peer.signal(sdp)
+    const conn = peers.current.get(userId)
+    if (conn) {
+      conn.peer.signal(sdp)
     }
   }, [])
 
   const handleIceCandidate = useCallback((userId: string, candidate: RTCIceCandidateInit) => {
-    const peer = peers.current.get(userId)
-    if (peer) {
-      peer.signal({ candidate } as SimplePeer.SignalData)
+    const conn = peers.current.get(userId)
+    if (conn) {
+      conn.peer.signal({ candidate } as SimplePeer.SignalData)
     }
   }, [])
 
@@ -137,9 +232,9 @@ export function useWebRTC(options: UseWebRTCOptions = {}) {
 
     signalingClient.on('user_left', (msg) => {
       if (msg.user_id) {
-        const peer = peers.current.get(msg.user_id)
-        if (peer) {
-          peer.destroy()
+        const conn = peers.current.get(msg.user_id)
+        if (conn) {
+          conn.peer.destroy()
           peers.current.delete(msg.user_id)
           removeRemoteStream(msg.user_id)
         }
@@ -152,8 +247,15 @@ export function useWebRTC(options: UseWebRTCOptions = {}) {
   const leaveRoom = useCallback(() => {
     signalingClient.leaveRoom()
 
-    peers.current.forEach((peer) => {
-      peer.destroy()
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current)
+      reconnectTimerRef.current = null
+    }
+    reconnectAttemptsRef.current = 0
+    isReconnectingRef.current = false
+
+    peers.current.forEach((conn) => {
+      conn.peer.destroy()
     })
     peers.current.clear()
 
@@ -176,5 +278,6 @@ export function useWebRTC(options: UseWebRTCOptions = {}) {
     joinRoom,
     leaveRoom,
     createPeer,
+    reconnectAttempts: reconnectAttemptsRef.current,
   }
 }
