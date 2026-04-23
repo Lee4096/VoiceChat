@@ -2,6 +2,8 @@ package voice
 
 import (
 	"fmt"
+	"log"
+	"os"
 	"sync"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go-linux"
@@ -49,6 +51,19 @@ func NewASRClient(cfg ASRConfig) (*ASRClient, error) {
 		cfg.Provider = "cpu"
 	}
 
+	if _, err := os.Stat(cfg.EncoderPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("EncoderPath does not exist: %s", cfg.EncoderPath)
+	}
+	if _, err := os.Stat(cfg.DecoderPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("DecoderPath does not exist: %s", cfg.DecoderPath)
+	}
+	if _, err := os.Stat(cfg.TokensPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("TokensPath does not exist: %s", cfg.TokensPath)
+	}
+
+	log.Printf("[ASR] Initializing with encoder=%s, decoder=%s, tokens=%s",
+		cfg.EncoderPath, cfg.DecoderPath, cfg.TokensPath)
+
 	config := &sherpa.OnlineRecognizerConfig{
 		FeatConfig: sherpa.FeatureConfig{
 			SampleRate: 16000,
@@ -88,6 +103,7 @@ func NewASRClient(cfg ASRConfig) (*ASRClient, error) {
 // Recognize 对提供的音频样本执行批量语音识别。
 // 音频应为 16kHz 采样率的归一化 float32。
 // 分块处理音频并返回最终识别结果。
+// 识别完成后自动重置流以支持下一次识别。
 func (c *ASRClient) Recognize(audioData []float32) (*ASRResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -109,11 +125,15 @@ func (c *ASRClient) Recognize(audioData []float32) (*ASRResult, error) {
 
 	result := c.recognizer.GetResult(c.stream)
 	if result == nil {
+		c.recognizer.Reset(c.stream)
 		return &ASRResult{Text: "", IsFinal: true}, nil
 	}
 
+	text := result.Text
+	c.recognizer.Reset(c.stream)
+
 	return &ASRResult{
-		Text:    result.Text,
+		Text:    text,
 		IsFinal: true,
 	}, nil
 }

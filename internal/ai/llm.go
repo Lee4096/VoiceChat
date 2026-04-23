@@ -30,9 +30,10 @@ type LLMClient struct {
 
 // ChatMessage 表示对话中的单条消息。
 type ChatMessage struct {
-	Role    string `json:"role"`    // "system"、"user" 或 "assistant"
-	Content string `json:"content"` // 消息文本
-	Name    string `json:"name,omitempty"` // 说话人的可选名称
+	Role      string `json:"role"`    // "system"、"user" 或 "assistant"
+	Content   string `json:"content"` // 消息文本
+	Name      string `json:"name,omitempty"` // 说话人的可选名称
+	Reasoning string `json:"reasoning,omitempty"` // 推理内容（部分模型支持）
 }
 
 // ChatRequest 发送到 LLM 聊天补全端点。
@@ -233,18 +234,25 @@ func (c *LLMClient) ChatStream(ctx context.Context, messages []ChatMessage) (<-c
 		defer resp.Body.Close()
 
 		scanner := bufio.NewScanner(resp.Body)
-
-		buf := make([]byte, 1024)
-		scanner.Buffer(buf, 1024*1024)
+		scanner.Buffer(make([]byte, 1024), 1024*1024)
 
 		for scanner.Scan() {
 			line := scanner.Bytes()
+			line = bytes.TrimSpace(line)
 			if len(line) == 0 {
 				continue
 			}
 
-			// 跳过非 JSON 行（例如空行或 SSE 注释）
-			if line[0] != '{' {
+			if bytes.HasPrefix(line, []byte("data: ")) {
+				line = bytes.TrimPrefix(line, []byte("data: "))
+			}
+
+			if bytes.HasPrefix(line, []byte("data:")) {
+				line = bytes.TrimPrefix(line, []byte("data:"))
+				line = bytes.TrimSpace(line)
+			}
+
+			if len(line) == 0 || line[0] != '{' {
 				continue
 			}
 
@@ -277,11 +285,18 @@ func (c *LLMClient) ChatStreamText(ctx context.Context, messages []ChatMessage) 
 	go func() {
 		defer close(textChan)
 		for resp := range streamChan {
-			if len(resp.Choices) > 0 && resp.Choices[0].Delta.Content != "" {
-				select {
-				case textChan <- resp.Choices[0].Delta.Content:
-				case <-ctx.Done():
-					return
+			if len(resp.Choices) > 0 {
+				delta := resp.Choices[0].Delta
+				text := delta.Content
+				if text == "" {
+					text = delta.Reasoning
+				}
+				if text != "" {
+					select {
+					case textChan <- text:
+					case <-ctx.Done():
+						return
+					}
 				}
 			}
 		}

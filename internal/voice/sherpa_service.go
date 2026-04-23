@@ -3,6 +3,7 @@ package voice
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go-linux"
@@ -36,20 +37,30 @@ func NewSherpaVoiceService(cfg SherpaConfig) (*SherpaVoiceService, error) {
 
 	// 如果提供了编码器/解码器路径，则初始化 ASR 客户端
 	if cfg.ASRConfig.EncoderPath != "" && cfg.ASRConfig.DecoderPath != "" {
+		log.Printf("[SherpaVoiceService] Initializing ASR with encoder=%s", cfg.ASRConfig.EncoderPath)
 		asr, err := NewASRClient(cfg.ASRConfig)
 		if err != nil {
+			log.Printf("[SherpaVoiceService] Failed to create ASR client: %v", err)
 			return nil, fmt.Errorf("failed to create ASR client: %w", err)
 		}
 		svc.asrClient = asr
+		log.Printf("[SherpaVoiceService] ASR client initialized successfully")
+	} else {
+		log.Printf("[SherpaVoiceService] ASR not configured (encoder or decoder path missing)")
 	}
 
 	// 如果提供了模型/语音路径，则初始化 TTS 客户端
 	if cfg.TTSConfig.ModelPath != "" && cfg.TTSConfig.VoicesPath != "" {
+		log.Printf("[SherpaVoiceService] Initializing TTS with model=%s", cfg.TTSConfig.ModelPath)
 		tts, err := NewKokoroTTSClient(cfg.TTSConfig)
 		if err != nil {
+			log.Printf("[SherpaVoiceService] Failed to create TTS client: %v", err)
 			return nil, fmt.Errorf("failed to create TTS client: %w", err)
 		}
 		svc.ttsClient = tts
+		log.Printf("[SherpaVoiceService] TTS client initialized successfully")
+	} else {
+		log.Printf("[SherpaVoiceService] TTS not configured (model or voices path missing)")
 	}
 
 	return svc, nil
@@ -89,6 +100,17 @@ func (s *SherpaVoiceService) Synthesize(text string) ([]float32, error) {
 		return nil, fmt.Errorf("TTS client not initialized")
 	}
 	return s.ttsClient.Synthesize(text, 0, 1.0)
+}
+
+// SynthesizeStream 使用回调函数流式发送音频块。
+func (s *SherpaVoiceService) SynthesizeStream(text string, callback AudioChunkCallback) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.ttsClient == nil {
+		return fmt.Errorf("TTS client not initialized")
+	}
+	return s.ttsClient.SynthesizeStream(text, 0, 1.0, callback)
 }
 
 // SynthesizeRaw 返回包含音频样本和采样率的原始 GeneratedAudio 结构。
@@ -208,6 +230,11 @@ func (p *VoiceProcessor) Recognize(samples []float32) (*ASRResult, error) {
 // Synthesize 使用底层语音服务将文本转换为语音。
 func (p *VoiceProcessor) Synthesize(text string) ([]float32, error) {
 	return p.svc.Synthesize(text)
+}
+
+// SynthesizeStream 使用回调函数流式发送音频块。
+func (p *VoiceProcessor) SynthesizeStream(text string, callback AudioChunkCallback) error {
+	return p.svc.SynthesizeStream(text, callback)
 }
 
 // Reset 清除音频缓冲区并重置 ASR 状态。

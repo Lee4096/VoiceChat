@@ -198,6 +198,49 @@ func (c *KokoroTTSClient) Synthesize(text string, sid int, speed float32) ([]flo
 	return generated.Samples, nil
 }
 
+// AudioChunkCallback 是音频块回调函数类型
+type AudioChunkCallback func(samples []float32, isFinal bool)
+
+// SynthesizeStream 在回调中流式发送音频块，实现实时音频传输
+func (c *KokoroTTSClient) SynthesizeStream(text string, sid int, speed float32, callback AudioChunkCallback) error {
+	if speed == 0 {
+		speed = 1.0
+	}
+
+	cfg := &sherpa.GenerationConfig{
+		SilenceScale: 0.2,
+		Speed:        speed,
+		Sid:          sid,
+	}
+
+	allSamples := []float32{}
+	generated := c.cfg.GenerateWithConfig(text, cfg, func(samples []float32, progress float32) bool {
+		allSamples = append(allSamples, samples...)
+
+		// 当积累足够多样本（约 0.5 秒 @ 24kHz = 12000 samples）时发送
+		if len(allSamples) >= 12000 {
+			callback(allSamples, false)
+			allSamples = []float32{} // 清空而不是设为 nil
+		}
+		return true
+	})
+
+	if generated == nil {
+		return fmt.Errorf("failed to generate audio")
+	}
+
+	// 发送最终 chunk
+	finalSamples := allSamples
+	if len(finalSamples) == 0 && generated.Samples != nil {
+		finalSamples = generated.Samples
+	}
+	if len(finalSamples) > 0 {
+		callback(finalSamples, true)
+	}
+
+	return nil
+}
+
 func (c *KokoroTTSClient) SampleRate() int {
 	return c.sampleRate
 }

@@ -92,12 +92,12 @@ type VoiceConfig struct {
 }
 
 type LLMConfig struct {
-	BaseURL      string
-	APIKey       string
-	Model        string
-	MaxTokens    int
-	Temperature  float64
-	SystemPrompt string
+	BaseURL      string `mapstructure:"base_url"`
+	APIKey       string `mapstructure:"api_key"`
+	Model        string `mapstructure:"model"`
+	MaxTokens    int    `mapstructure:"max_tokens"`
+	Temperature  float64 `mapstructure:"temperature"`
+	SystemPrompt string `mapstructure:"system_prompt"`
 }
 
 func Load() (*Config, error) {
@@ -138,6 +138,7 @@ func Load() (*Config, error) {
 
 	v.AddConfigPath(".")
 	v.AddConfigPath("./config")
+	v.AddConfigPath("/workspace/config")
 	v.SetConfigName("config")
 	v.SetConfigType("yaml")
 
@@ -151,6 +152,24 @@ func Load() (*Config, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
+
+	cfg.LLM.BaseURL = v.GetString("llm.base_url")
+	cfg.LLM.APIKey = v.GetString("llm.api_key")
+	cfg.LLM.Model = v.GetString("llm.model")
+	cfg.LLM.MaxTokens = v.GetInt("llm.max_tokens")
+	cfg.LLM.Temperature = v.GetFloat64("llm.temperature")
+	cfg.LLM.SystemPrompt = v.GetString("llm.system_prompt")
+
+	cfg.Voice.ASREncoderPath = v.GetString("voice.asr_encoder_path")
+	cfg.Voice.ASRDecoderPath = v.GetString("voice.asr_decoder_path")
+	cfg.Voice.ASRTokensPath = v.GetString("voice.asr_tokens_path")
+	cfg.Voice.TTSModelPath = v.GetString("voice.tts_model_path")
+	cfg.Voice.TTSVoicesPath = v.GetString("voice.tts_voices_path")
+	cfg.Voice.TTSTokensPath = v.GetString("voice.tts_tokens_path")
+	cfg.Voice.TTSDataDir = v.GetString("voice.tts_data_dir")
+	cfg.Voice.SampleRate = v.GetInt("voice.sample_rate")
+	cfg.Voice.EnableVAD = v.GetBool("voice.enable_vad")
+	cfg.Voice.VADAggressiveness = v.GetInt("voice.vad_aggressiveness")
 
 	return &cfg, nil
 }

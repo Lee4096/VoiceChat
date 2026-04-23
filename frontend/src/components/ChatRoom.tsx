@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { useRoomStore } from '../store/room'
 import { useWebRTC } from '../hooks/useWebRTC'
 import { signalingClient } from '../lib/websocket'
@@ -14,6 +16,7 @@ interface AIMessage {
   isUser: boolean
   audio?: string
   timestamp: Date
+  isTyping?: boolean
 }
 
 interface ChatRoomProps {
@@ -35,6 +38,11 @@ export function ChatRoom({ onLeave }: ChatRoomProps) {
   const audioContextRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const animationRef = useRef<number | null>(null)
+  const messagesEndRef = useRef<HTMLDivElement | null>(null)
+
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [])
 
   const {
     state: convState,
@@ -69,6 +77,7 @@ export function ChatRoom({ onLeave }: ChatRoomProps) {
     stop: stopRecorder,
     close: closeRecorder,
     convertToBase64,
+    getSampleRate,
   } = useAudioRecorder({
     onData: (data) => {
       const avg = data.reduce((a, b) => a + Math.abs(b), 0) / data.length
@@ -103,6 +112,10 @@ export function ChatRoom({ onLeave }: ChatRoomProps) {
     })
     return () => { unsub() }
   }, [])
+
+  useEffect(() => {
+    scrollToBottom()
+  }, [aiMessages, scrollToBottom])
 
   useEffect(() => {
     const init = async () => {
@@ -175,12 +188,21 @@ export function ChatRoom({ onLeave }: ChatRoomProps) {
   const handleAITextResponse = useCallback((msg: any) => {
     console.log('Received ai_text_response:', msg)
     const payload = msg.payload || {}
-    setAIMessages(prev => [...prev, {
-      id: Date.now().toString(),
-      text: payload.text || '',
-      isUser: false,
-      timestamp: new Date(),
-    }])
+    const text = payload.text || ''
+    if (!text) return
+
+    setAIMessages(prev => {
+      const lastIndex = prev.length - 1
+      if (lastIndex >= 0 && !prev[lastIndex].isUser && prev[lastIndex].isTyping) {
+        return prev.map((m, i) => i === lastIndex ? { ...m, text, isTyping: false } : m)
+      }
+      return [...prev, {
+        id: Date.now().toString(),
+        text,
+        isUser: false,
+        timestamp: new Date(),
+      }]
+    })
   }, [])
 
   const handleStopAudio = useCallback((msg: any) => {
@@ -194,17 +216,39 @@ export function ChatRoom({ onLeave }: ChatRoomProps) {
     const payload = msg.payload || {}
     if (payload.status === 'recognizing') {
       resetConv()
-    } else if (payload.status === 'generating') {
-      // AI is generating response
     } else if (payload.status === 'done') {
-      // Response complete
+      setAIMessages(prev => prev.map(m => ({ ...m, isTyping: false })))
     } else if (payload.status === 'no_speech') {
       setError('未检测到语音')
     }
   }, [resetConv])
 
-  const handleTextDelta = useCallback((_msg: any) => {
-    // Real-time text display can be implemented here
+  const handleTextDelta = useCallback((msg: any) => {
+    const payload = msg.payload || {}
+    const deltaText = payload.text || ''
+    if (!deltaText) return
+
+    setAIMessages(prev => {
+      const lastIndex = prev.length - 1
+      if (lastIndex < 0) return prev
+
+      const lastMsg = prev[lastIndex]
+      if (lastMsg.isUser) {
+        return [...prev, {
+          id: Date.now().toString(),
+          text: deltaText,
+          isUser: false,
+          timestamp: new Date(),
+        }]
+      }
+
+      return prev.map((m, i) => {
+        if (i === lastIndex) {
+          return { ...m, text: m.text + deltaText }
+        }
+        return m
+      })
+    })
   }, [])
 
   useEffect(() => {
@@ -252,6 +296,7 @@ export function ChatRoom({ onLeave }: ChatRoomProps) {
   }
 
   const handleStartRecording = async () => {
+    console.log('handleStartRecording called, connectionStatus:', connectionStatus)
     try {
       if (wakeLockSupported && !wakeLockActive) {
         await requestWakeLock()
@@ -259,6 +304,7 @@ export function ChatRoom({ onLeave }: ChatRoomProps) {
       await initAudioContext()
       await startRecorder()
       startConvRecording()
+      console.log('Recording started successfully')
     } catch (err) {
       console.error('Failed to start recording:', err)
       setError('无法开始录音')
@@ -266,18 +312,23 @@ export function ChatRoom({ onLeave }: ChatRoomProps) {
   }
 
   const handleStopRecording = async () => {
+    console.log('handleStopRecording called')
     const pcmData = await stopRecorder()
     stopConvRecording()
 
+    console.log('stopRecorder returned:', pcmData ? `${pcmData.length} samples` : 'null')
     if (pcmData && pcmData.length > 0) {
       const base64 = convertToBase64(pcmData)
+      console.log('Sending ai_voice_chat with', base64.length, 'chars')
       setAIMessages(prev => [...prev, {
         id: Date.now().toString(),
         text: '[Voice Message]',
         isUser: true,
         timestamp: new Date(),
       }])
-      signalingClient.sendAIVoiceChat(base64, 16000)
+      signalingClient.sendAIVoiceChat(base64, getSampleRate())
+    } else {
+      console.warn('No audio data recorded')
     }
   }
 
@@ -419,14 +470,21 @@ export function ChatRoom({ onLeave }: ChatRoomProps) {
                   <div className={`max-w-[80%] rounded-lg px-4 py-2 ${
                     msg.isUser ? 'bg-blue-600 text-white' : 'bg-gray-700 text-white'
                   }`}>
-                    <p className="text-sm">{msg.text}</p>
+                    {msg.isUser ? (
+                      <p className="text-sm">{msg.text}</p>
+                    ) : (
+                      <div className="text-sm">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text || '...'}</ReactMarkdown>
+                        {msg.isTyping && <span className="inline-block w-2 h-4 bg-white ml-1 animate-pulse" />}
+                      </div>
+                    )}
                     {msg.isUser && msg.audio && (
                       <p className="text-xs opacity-70 mt-1">Voice message</p>
                     )}
                   </div>
                 </div>
               ))}
-              {isProcessing && (
+              {isProcessing && !aiMessages.some(m => m.isTyping) && (
                 <div className="flex justify-start">
                   <div className="bg-gray-700 rounded-lg px-4 py-2">
                     <div className="flex gap-1">
@@ -437,6 +495,7 @@ export function ChatRoom({ onLeave }: ChatRoomProps) {
                   </div>
                 </div>
               )}
+              <div ref={messagesEndRef} />
             </div>
 
             <form onSubmit={handleAITextSubmit} className="flex gap-2">

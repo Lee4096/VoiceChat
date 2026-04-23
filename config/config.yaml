@@ -44,20 +44,20 @@ oauth2:
     callback_url: "http://localhost:8080/api/v1/auth/callback/google"
 
 voice:
-  asr_encoder_path: "./models/paraformer/sherpa-onnx-streaming-paraformer-bilingual-zh-en/encoder.onnx"
-  asr_decoder_path: "./models/paraformer/sherpa-onnx-streaming-paraformer-bilingual-zh-en/decoder.onnx"
-  asr_tokens_path: "./models/paraformer/sherpa-onnx-streaming-paraformer-bilingual-zh-en/tokens.txt"
-  tts_model_path: "./models/kokoro/kokoro-en-v0_19/model.onnx"
-  tts_voices_path: "./models/kokoro/kokoro-en-v0_19/voices.bin"
-  tts_tokens_path: "./models/kokoro/kokoro-en-v0_19/tokens.txt"
-  tts_data_dir: "./models/kokoro/kokoro-en-v0_19/espeak-ng-data"
+  asr_encoder_path: "/workspace/models/paraformer/encoder.int8.onnx"
+  asr_decoder_path: "/workspace/models/paraformer/decoder.int8.onnx"
+  asr_tokens_path: "/workspace/models/paraformer/tokens.txt"
+  tts_model_path: "/workspace/models/kokoro/kokoro-en-v0_19/model.onnx"
+  tts_voices_path: "/workspace/models/kokoro/kokoro-en-v0_19/voices.bin"
+  tts_tokens_path: "/workspace/models/kokoro/kokoro-en-v0_19/tokens.txt"
+  tts_data_dir: "/workspace/models/kokoro/kokoro-en-v0_19/espeak-ng-data"
   sample_rate: 16000
   enable_vad: false
   vad_aggressiveness: 2
 
 llm:
   base_url: "https://openrouter.ai/api/v1"
-  api_key: ""
+  api_key: "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"
   model: "minimax/minimax-m2.5:free"
   max_tokens: 2048
   temperature: 0.7
