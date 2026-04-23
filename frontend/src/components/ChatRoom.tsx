@@ -6,6 +6,7 @@ import { useAuthStore } from '../store/auth'
 import { useAudioPlayer } from '../hooks/useAudioPlayer'
 import { useAudioRecorder } from '../hooks/useAudioRecorder'
 import { useConversationState } from '../hooks/useConversationState'
+import { useWakeLock } from '../hooks/useWakeLock'
 
 interface AIMessage {
   id: string
@@ -84,7 +85,17 @@ export function ChatRoom({ onLeave }: ChatRoomProps) {
       console.error('WebRTC error:', err)
       setError('连接失败')
     },
+    onReconnecting: (attempt) => {
+      console.log('WebRTC reconnecting, attempt:', attempt)
+      setError(`网络不稳定，正在重连... (${attempt})`)
+    },
+    onReconnected: () => {
+      console.log('WebRTC reconnected')
+      setError(null)
+    },
   })
+
+  const { request: requestWakeLock, isSupported: wakeLockSupported, isActive: wakeLockActive } = useWakeLock()
 
   useEffect(() => {
     const unsub = signalingClient.onStateChange((state) => {
@@ -242,6 +253,9 @@ export function ChatRoom({ onLeave }: ChatRoomProps) {
 
   const handleStartRecording = async () => {
     try {
+      if (wakeLockSupported && !wakeLockActive) {
+        await requestWakeLock()
+      }
       await initAudioContext()
       await startRecorder()
       startConvRecording()
